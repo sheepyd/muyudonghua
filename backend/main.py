@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import StreamingResponse
 
@@ -62,20 +62,56 @@ async def proxy_emby_image(path: str):
             raise HTTPException(status_code=502)
 
 @app.get("/api/proxy/stream/{item_id}")
-async def proxy_emby_stream(item_id: str):
+async def proxy_emby_stream(item_id: str, request: Request):
     """
-    代理/转发视频流
-    注意：这会消耗服务器流量。如果服务器带宽有限，请知晓。
+    智能流媒体代理：支持 Range 请求 (拖拽进度条)
     """
     stream_url = f"{EMBY_HOST}/emby/Videos/{item_id}/stream?static=true&api_key={API_KEY}"
     
-    async def stream_generator():
-        async with httpx.AsyncClient() as client:
-            async with client.stream("GET", stream_url, timeout=None) as resp:
-                async for chunk in resp.aiter_bytes():
-                    yield chunk
+    # 1. 透传 Range 头 (关键：告诉 Emby 我们只需要视频的一部分)
+    headers = {}
+    range_header = request.headers.get("range")
+    if range_header:
+        headers["Range"] = range_header
+    
+    # 使用独立的 Client 实例以控制生命周期
+    client = httpx.AsyncClient()
+    req = client.build_request("GET", stream_url, headers=headers)
+    
+    try:
+        # 发送请求但不立即下载 Body
+        upstream_resp = await client.send(req, stream=True)
+    except Exception as e:
+        await client.aclose()
+        print(f"Stream Connect Error: {e}")
+        raise HTTPException(status_code=502, detail="Upstream Connect Error")
 
-    return StreamingResponse(stream_generator(), media_type="video/mp4")
+    # 2. 筛选需要转发给浏览器的响应头
+    forward_headers = {}
+    # 只要这几个关键头，其他的过滤掉以免冲突
+    for key in ["content-type", "content-length", "content-range", "accept-ranges"]:
+        if key in upstream_resp.headers:
+            forward_headers[key] = upstream_resp.headers[key]
+
+    # 3. 定义流生成器 (一边收一边发)
+    async def stream_generator():
+        try:
+            async for chunk in upstream_resp.aiter_bytes(chunk_size=64 * 1024): # 64KB chunks
+                yield chunk
+        except Exception as e:
+            print(f"Stream Transfer Error: {e}")
+        finally:
+            # 必须手动关闭上游连接
+            await upstream_resp.aclose()
+            await client.aclose()
+
+    # 4. 返回流式响应，状态码透传 (200 或 206)
+    return StreamingResponse(
+        stream_generator(), 
+        status_code=upstream_resp.status_code,
+        headers=forward_headers,
+        media_type=upstream_resp.headers.get("content-type")
+    )
 
 # --- 辅助函数 ---
 
