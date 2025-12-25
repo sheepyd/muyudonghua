@@ -1,54 +1,22 @@
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Ubuntu:wght@400;500;700&display=swap');
-
 :root {
-  /* Yuju Dark Theme Variables */
-  --main-bg-color: #0a0a0a; /* Fallback for background image */
-  --main-text-color: #f5f5f5;
-  
-  --gradient: linear-gradient(135deg, #853eff 0%, #f76cc6 50%, #ffffff 100%);
-  --purple-text-color: #a78bfa;
-  --pink-text-color: #f9a8d4;
-  
-  --item-bg-color: rgba(25, 26, 30, 0.85);
-  --item-hover-color: rgba(35, 38, 45, 0.9);
-  
-  --item-left-title-color: #ffffff;
-  --item-left-text-color: #b8b8b8;
-  
-  --card-filter: 10px; /* Slightly increased for better glass effect */
-  
-  /* Scrollbar Colors */
-  --scrollbar-thumb: linear-gradient(135deg, #853eff, #f76cc6);
-  --scrollbar-track: rgba(0, 0, 0, 0.05);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --base-bg: #09090b;
+  --base-text: #f8fafc;
+  --accent: #f59e0b;
+  --scrollbar-thumb: rgba(248, 250, 252, 0.35);
+  --scrollbar-track: rgba(255, 255, 255, 0.06);
 }
 
 body {
-  background-color: var(--main-bg-color);
-  /* Optional: Add a dark background image if available, else dark color */
-  /* background-image: url(...); */ 
-  color: var(--main-text-color);
-  font-family: 'Ubuntu', 'Orbitron', sans-serif;
+  background-color: var(--base-bg);
+  color: var(--base-text);
+  font-family: var(--font-sans);
   margin: 0;
   -webkit-font-smoothing: antialiased;
   scroll-behavior: smooth;
   position: relative;
   overflow-x: hidden;
-}
-
-/* Atmosphere Glow (copied from reference) */
-body::before {
-    content: '';
-    position: fixed;
-    top: -50%;
-    left: -50%;
-    width: 200%;
-    height: 200%;
-    background: radial-gradient(circle at 30% 50%, rgba(133, 62, 255, 0.12) 0%, transparent 50%),
-                radial-gradient(circle at 70% 50%, rgba(247, 108, 198, 0.12) 0%, transparent 50%),
-                radial-gradient(circle at 50% 80%, rgba(65, 209, 255, 0.08) 0%, transparent 50%);
-    pointer-events: none;
-    z-index: -1;
 }
 
 a {
@@ -58,7 +26,7 @@ a {
 }
 
 a:hover {
-  color: var(--pink-text-color);
+  color: var(--accent);
 }
 
 /* Custom Scrollbar (Copied from reference) */
@@ -71,15 +39,12 @@ a:hover {
     background: var(--scrollbar-thumb);
     border-radius: 10px;
     transition: all 0.3s ease;
-    box-shadow: 0 0 6px rgba(133, 62, 255, 0.3);
     border: 2px solid transparent;
     background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(135deg, #a78bfa, #f9a8d4);
-    box-shadow: 0 0 12px rgba(133, 62, 255, 0.6),
-                inset 0 0 10px rgba(255, 255, 255, 0.1);
+    background: rgba(248, 250, 252, 0.5);
 }
 
 ::-webkit-scrollbar-track {
@@ -91,6 +56,6 @@ a:hover {
 
 /* Selection Color */
 ::selection {
-    background: rgba(133, 62, 255, 0.3);
+    background: rgba(245, 158, 11, 0.3);
     color: #fff;
 }

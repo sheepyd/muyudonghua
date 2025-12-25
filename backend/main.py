@@ -160,7 +160,13 @@ async def get_video_list(limit: int = 10, seriesId: str = None):
         if USER_ID: params["UserId"] = USER_ID
 
         if seriesId:
-            params.update({"IncludeItemTypes": "Episode", "ParentId": seriesId, "SortBy": "SortName", "SortOrder": "Ascending"})
+            params.update({
+                "IncludeItemTypes": "Episode",
+                "ParentId": seriesId,
+                "SortBy": "SortName",
+                "SortOrder": "Ascending",
+                "Limit": 2000,
+            })
         else:
             params.update({"IncludeItemTypes": "Series,Movie", "SortBy": "DateCreated", "SortOrder": "Descending", "Limit": limit})
 

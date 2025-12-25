@@ -1,52 +1,74 @@
 <template>
-  <div class="player-view">
-    <!-- 背景层 -->
-    <div class="background-layer" :style="backgroundStyle"></div>
+  <div class="cinema-player">
+    <div class="player-backdrop" :style="backgroundStyle"></div>
 
-    <div class="content-container">
-      <!-- 顶部导航 -->
-      <div class="top-bar">
+    <div class="player-shell animate-theater-enter">
+      <header class="player-header animate-slide-down-fade">
         <button class="back-btn" @click="$router.go(-1)">
-          <span class="icon">←</span> 返回
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d="M11.8 4.2L6 10l5.8 5.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+          <span class="back-text">Back to Reel</span>
         </button>
-        <div class="title-area">
+
+        <div class="header-title">
           <img v-if="logoUrl" :src="logoUrl" class="video-logo" alt="Logo" />
-          <h2 v-else class="video-title">{{ videoTitle }}</h2>
-        </div>
-      </div>
-
-      <!-- 主要内容区域：左侧播放器，右侧选集 -->
-      <div class="main-content">
-        <div class="player-section">
-          <div class="player-wrapper">
-             <Player :video-id="id" />
-          </div>
+          <span v-else class="title-text">{{ videoTitle }}</span>
         </div>
 
-        <!-- 选集侧边栏 (仅当有选集时显示) -->
-        <div v-if="episodes.length > 0" class="sidebar">
-          <div class="sidebar-header">
-            <h3>选集</h3>
-            <span class="episode-count">{{ episodes.length }} 集</span>
+        <div class="header-actions">
+          <span class="quality-badge">4K</span>
+          <button class="icon-btn" type="button" aria-label="Cast">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="4" y="5" width="16" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path d="M7 20c0-3.3-2.7-6-6-6" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path d="M11 20c0-5.5-4.5-10-10-10" fill="none" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+          </button>
+          <button class="icon-btn" type="button" aria-label="Settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.5" />
+              <path d="M19 12l2-1-2-1-1-2-2 1-2-1-2 1-2-1-2 1-1 2-2 1 2 1 1 2 2-1 2 1 2-1 2 1 2-1z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="player-body">
+        <section class="player-screen animate-fade-in-slow">
+          <div class="screen-shadow"></div>
+          <div class="player-inner">
+            <Player :video-id="id" />
           </div>
-          <div class="episode-list">
-            <div 
-              v-for="ep in episodes" 
-              :key="ep.id" 
-              class="episode-item"
+        </section>
+
+        <aside v-if="playlistItems.length" class="playlist animate-slide-in-right-delayed">
+          <div class="playlist-header">Playlist</div>
+          <div class="playlist-list">
+            <div
+              v-for="ep in playlistItems"
+              :key="ep.id"
+              class="playlist-item"
               :class="{ active: ep.id == id }"
               @click="switchEpisode(ep.id)"
             >
-              <div class="ep-index">{{ ep.index }}</div>
-              <div class="ep-info">
-                <div class="ep-title">{{ ep.title }}</div>
+              <div class="playlist-thumb">
+                <img v-if="thumbUrl(ep)" :src="thumbUrl(ep)" :alt="ep.title" loading="lazy" />
+                <div v-else class="thumb-fallback"></div>
+                <div class="thumb-overlay"></div>
+                <div class="thumb-number">{{ formatIndex(ep.index) }}</div>
               </div>
-              <div v-if="ep.id == id" class="playing-indicator">
-                <span></span><span></span><span></span>
+
+              <div class="playlist-info">
+                <div class="playlist-meta">
+                  <span v-if="ep.id == id" class="active-dot"></span>
+                  <span class="meta-text">EP {{ formatIndex(ep.index) }}</span>
+                </div>
+                <h4 class="playlist-title">{{ ep.title }}</h4>
               </div>
             </div>
           </div>
-        </div>
+        </aside>
       </div>
     </div>
   </div>
@@ -69,14 +91,33 @@ const videoTitle = ref('');
 const episodes = ref([]);
 
 const backgroundStyle = computed(() => {
-  // 优先使用 poster_url，如果没有再尝试 backdrop_url
   const url = posterUrl.value || backdropUrl.value;
-  return url 
+  return url
     ? { backgroundImage: `url(${url})` }
-    : { backgroundColor: '#141414' };
+    : { backgroundColor: '#09090b' };
 });
 
-// 获取当前播放视频的信息（背景、SeriesId等）
+const playlistItems = computed(() => {
+  const sourceItems = episodes.value.length
+    ? episodes.value
+    : [
+        {
+          id: id.value,
+          title: videoTitle.value || 'Now Playing',
+          poster_url: posterUrl.value,
+          backdrop_url: backdropUrl.value,
+        },
+      ];
+
+  return sourceItems.map((item, index) => ({
+    ...item,
+    index: index + 1,
+  }));
+});
+
+const formatIndex = (value) => String(value).padStart(2, '0');
+const thumbUrl = (item) => item?.poster_url || item?.backdrop_url || '';
+
 const fetchPlayInfo = async (videoId) => {
   try {
     const res = await fetch(`/api/play/${videoId}`);
@@ -84,24 +125,23 @@ const fetchPlayInfo = async (videoId) => {
     backdropUrl.value = data.backdrop_url || '';
     posterUrl.value = data.poster_url || '';
     logoUrl.value = data.logo_url || '';
-    seriesId.value = data.series_id;
-    videoTitle.value = data.title;
-    
-    // Debug logging
-    console.log("Play Info Loaded:", {
-      id: videoId,
-      poster: posterUrl.value,
-      backdrop: backdropUrl.value
-    });
-    
-    // 如果有 SeriesId，获取选集列表
+    seriesId.value = data.series_id ?? null;
+    videoTitle.value = data.title || '';
+
+    let loaded = false;
     if (seriesId.value) {
-      fetchEpisodes(seriesId.value);
-    } else {
-      episodes.value = []; // 清空选集
+      loaded = await fetchEpisodes(seriesId.value);
+    }
+
+    if (!loaded && seriesId.value !== videoId) {
+      loaded = await fetchEpisodes(videoId);
+    }
+
+    if (!loaded) {
+      episodes.value = [];
     }
   } catch (e) {
-    console.error("Error fetching play info:", e);
+    console.error('Error fetching play info:', e);
   }
 };
 
@@ -109,13 +149,11 @@ const fetchEpisodes = async (sid) => {
   try {
     const res = await fetch(`/api/videos?seriesId=${sid}`);
     const data = await res.json();
-    // 简单处理一下标题，假设标题是 "Episode 1" 这种，也可以加个 index 字段
-    episodes.value = data.items.map((item, index) => ({
-      ...item,
-      index: index + 1 // 简单的序号
-    }));
+    episodes.value = data.items || [];
+    return episodes.value.length > 0;
   } catch (e) {
-    console.error("Error fetching episodes:", e);
+    console.error('Error fetching episodes:', e);
+    return false;
   }
 };
 
@@ -124,11 +162,13 @@ const switchEpisode = (newId) => {
   router.replace({ name: 'Player', params: { id: newId } });
 };
 
-// 监听路由参数变化（点击选集切换时）
-watch(() => route.params.id, (newId) => {
-  id.value = newId;
-  fetchPlayInfo(newId);
-});
+watch(
+  () => route.params.id,
+  (newId) => {
+    id.value = newId;
+    fetchPlayInfo(newId);
+  }
+);
 
 onMounted(() => {
   fetchPlayInfo(id.value);
@@ -136,251 +176,422 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.player-view {
+.cinema-player {
   width: 100vw;
   height: 100vh;
   position: relative;
   overflow: hidden;
-  background: #0a0a0a;
-  color: #f5f5f5;
-  display: flex;
-  flex-direction: column;
+  background: #09090b;
+  color: #e2e8f0;
+  font-family: var(--font-sans);
 }
 
-.background-layer {
+.player-backdrop {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  inset: 0;
   background-size: cover;
   background-position: center;
-  filter: blur(40px) brightness(0.4);
+  filter: blur(45px) brightness(0.35);
+  opacity: 0.75;
+  transform: scale(1.05);
   z-index: 0;
-  transform: scale(1.1);
-  opacity: 0.8;
 }
 
-.content-container {
+.player-shell {
   position: relative;
   z-index: 1;
-  height: 100%;
   display: flex;
   flex-direction: column;
+  height: 100%;
+  overflow: hidden;
 }
 
-.top-bar {
-  height: 70px;
+.player-header {
+  height: 64px;
   display: flex;
   align-items: center;
-  padding: 0 40px;
-  background: rgba(25, 26, 30, 0.6);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  justify-content: space-between;
+  padding: 0 24px;
+  background: rgba(9, 9, 11, 0.7);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
 }
 
 .back-btn {
-  background: none;
-  border: none;
-  color: #b8b8b8;
-  font-size: 1.1rem;
-  cursor: pointer;
   display: flex;
   align-items: center;
-  margin-right: 30px;
-  transition: color 0.2s;
-  font-weight: bold;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: rgba(226, 232, 240, 0.6);
+  cursor: pointer;
+  transition: color 0.3s ease;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+}
+
+.back-btn svg {
+  width: 18px;
+  height: 18px;
 }
 
 .back-btn:hover {
-  color: #f76cc6;
+  color: #ffffff;
 }
 
-.title-area {
+.header-title {
+  flex: 1;
   display: flex;
+  justify-content: center;
   align-items: center;
-  height: 50px;
+  min-width: 0;
+  text-align: center;
+  font-weight: 600;
+  color: rgba(226, 232, 240, 0.8);
+}
+
+.title-text {
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .video-logo {
-  height: 100%;
-  width: auto;
+  max-height: 30px;
+  max-width: 240px;
   object-fit: contain;
-  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
 }
 
-.video-title {
-  font-size: 1.2rem;
-  font-weight: 700;
-  color: #f5f5f5;
-  margin: 0;
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.main-content {
+.quality-badge {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.6rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+  color: rgba(226, 232, 240, 0.8);
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: rgba(148, 163, 184, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.3s ease, border-color 0.3s ease, transform 0.3s ease;
+}
+
+.icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.icon-btn:hover {
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: scale(1.05);
+}
+
+.player-body {
   flex: 1;
   display: flex;
   overflow: hidden;
-  padding: 30px;
-  gap: 30px;
 }
 
-/* 左侧播放器区域 */
-.player-section {
+.player-screen {
+  flex: 1;
+  background: #000;
+  position: relative;
+  min-width: 0;
+}
+
+.screen-shadow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.6);
+  z-index: 1;
+}
+
+.player-inner {
+  position: relative;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.playlist {
+  width: 340px;
+  flex: 0 0 340px;
+  background: rgba(9, 9, 11, 0.92);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  display: flex;
+  flex-direction: column;
+  backdrop-filter: blur(12px);
+}
+
+.playlist-header {
+  padding: 22px 24px;
+  font-size: 0.65rem;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: rgba(148, 163, 184, 0.6);
+  font-family: var(--font-mono);
+}
+
+.playlist-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.playlist-item {
+  display: flex;
+  gap: 16px;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.3s ease;
+}
+
+.playlist-item:hover {
+  opacity: 0.8;
+}
+
+.playlist-item.active {
+  opacity: 1;
+}
+
+.playlist-thumb {
+  width: 128px;
+  aspect-ratio: 16 / 9;
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  flex-shrink: 0;
+  background: #111827;
+  filter: grayscale(1);
+  transition: filter 0.3s ease, opacity 0.3s ease, box-shadow 0.3s ease;
+}
+
+.playlist-item.active .playlist-thumb {
+  filter: grayscale(0);
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.5);
+}
+
+.playlist-thumb img,
+.thumb-fallback {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.thumb-fallback {
+  background: linear-gradient(135deg, #1f2937, #0f172a);
+}
+
+.thumb-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.thumb-number {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.12);
+  mix-blend-mode: overlay;
+}
+
+.playlist-info {
   flex: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  align-items: center;
   min-width: 0;
 }
 
-.player-wrapper {
-  width: 100%;
-  max-width: 1400px;
-  aspect-ratio: 16 / 9;
-  background: #000;
-  box-shadow: 0 20px 50px rgba(133, 62, 255, 0.15), 0 0 60px rgba(247, 108, 198, 0.1);
-  border-radius: 12px;
-  overflow: hidden;
-  border: none;
-}
-
-/* 右侧选集侧边栏 */
-.sidebar {
-  width: 350px;
-  background: rgba(25, 26, 30, 0.85);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border-radius: 12px;
-  display: flex;
-  flex-direction: column;
-  border: none;
-  overflow: hidden;
-  flex-shrink: 0;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-}
-
-.sidebar-header {
-  padding: 20px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.sidebar-header h3 {
-  margin: 0;
-  font-size: 1.1rem;
-  font-weight: 700;
-  color: #f5f5f5;
-}
-
-.episode-count {
-  font-size: 0.85rem;
-  color: #a78bfa;
-  background: rgba(133, 62, 255, 0.15);
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-weight: bold;
-}
-
-.episode-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px;
-}
-
-/* Scrollbar override for this specific container */
-.episode-list::-webkit-scrollbar-thumb {
-  background: linear-gradient(135deg, #853eff, #f76cc6);
-}
-
-.episode-item {
+.playlist-meta {
   display: flex;
   align-items: center;
-  padding: 15px 12px;
-  margin-bottom: 5px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  border-bottom: 1px solid transparent;
+  gap: 8px;
+  margin-bottom: 6px;
 }
 
-.episode-item:hover {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(133, 62, 255, 0.06));
-  transform: translateY(-2px);
-  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+.meta-text {
+  font-size: 0.6rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+  color: rgba(148, 163, 184, 0.65);
 }
 
-.episode-item.active {
-  background: rgba(133, 62, 255, 0.2);
-  color: #f9a8d4;
-  box-shadow: inset 0 0 10px rgba(133, 62, 255, 0.1);
+.active-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+  animation: pulse 1.6s ease-in-out infinite;
 }
 
-.ep-index {
-  font-size: 1rem;
-  color: #b8b8b8;
-  width: 35px;
-  text-align: center;
-  font-weight: bold;
-}
-
-.episode-item.active .ep-index {
-  color: #f9a8d4;
-}
-
-.ep-info {
-  flex: 1;
-  margin-left: 10px;
-  overflow: hidden;
-}
-
-.ep-title {
-  font-size: 1rem;
-  white-space: nowrap;
+.playlist-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: rgba(148, 163, 184, 0.75);
+  line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-weight: 500;
+  white-space: nowrap;
 }
 
-/* 播放中跳动动画 */
-.playing-indicator {
-  display: flex;
-  gap: 2px;
-  align-items: flex-end;
-  height: 12px;
-  margin-left: 10px;
+.playlist-item.active .meta-text {
+  color: rgba(245, 158, 11, 0.9);
 }
 
-.playing-indicator span {
-  width: 3px;
-  background: #f76cc6;
-  animation: bounce 1s infinite ease-in-out;
+.playlist-item.active .playlist-title {
+  color: #ffffff;
 }
 
-.playing-indicator span:nth-child(1) { animation-delay: 0s; height: 6px; }
-.playing-indicator span:nth-child(2) { animation-delay: 0.2s; height: 12px; }
-.playing-indicator span:nth-child(3) { animation-delay: 0.4s; height: 8px; }
-
-@keyframes bounce {
-  0%, 100% { transform: scaleY(0.5); }
-  50% { transform: scaleY(1); }
+.playlist-item:hover .playlist-title {
+  color: rgba(226, 232, 240, 0.9);
 }
 
-@media (max-width: 1000px) {
-  .main-content {
-    flex-direction: column;
-    padding: 15px;
-    gap: 20px;
+@keyframes theater-enter {
+  0% {
+    opacity: 0;
+    transform: scale(0.98) translateY(10px);
+    filter: blur(8px);
   }
-  
-  .sidebar {
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+  }
+}
+
+@keyframes slide-in-right {
+  0% {
+    transform: translateX(80px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-down {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0.5;
+  }
+}
+
+.animate-theater-enter {
+  animation: theater-enter 1s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.animate-slide-in-right-delayed {
+  animation: slide-in-right 0.8s cubic-bezier(0.22, 1, 0.36, 1) 0.2s backwards;
+}
+
+.animate-slide-down-fade {
+  animation: slide-down 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.animate-fade-in-slow {
+  animation: fade-in 1.4s ease;
+}
+
+@media (max-width: 1024px) {
+  .playlist {
+    width: 300px;
+  }
+}
+
+@media (max-width: 900px) {
+  .player-body {
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .playlist {
     width: 100%;
-    height: 300px;
+    flex: 0 0 auto;
+    border-left: none;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .player-screen {
     flex: none;
+    height: 55vh;
+  }
+}
+
+@media (max-width: 640px) {
+  .player-header {
+    padding: 0 16px;
+  }
+
+  .header-actions {
+    gap: 8px;
+  }
+
+  .playlist-header,
+  .playlist-list {
+    padding-left: 16px;
+    padding-right: 16px;
   }
 }
 </style>

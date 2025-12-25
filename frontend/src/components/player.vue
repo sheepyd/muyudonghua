@@ -39,7 +39,7 @@ const initPlayer = async (id) => {
         isLive: false,
         muted: false,
         autoplay: true,
-        autoSize: true,
+        autoSize: false,
         fullscreen: false,
         theme: '#e50914',
         // ... 其他选项保持不变 ...
