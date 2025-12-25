@@ -2,18 +2,26 @@
 
 # Function to handle cleanup on exit
 cleanup() {
-    echo "Stopping servers..."
+    echo ""
+    echo ">>> Stopping servers..."
     kill $(jobs -p) 2>/dev/null
 }
 trap cleanup EXIT
 
+# 0. Check Environment
+if [ ! -f ".env" ]; then
+    echo "Warning: .env file not found! Please create it based on .env.example"
+fi
+
 # 1. Start Backend
-echo ">>> Starting Backend (Port 8800)..."
+echo ">>> Starting Backend (Port 8800) using venv..."
 cd backend
-# Check if venv exists, if not create it (optional, skipping for simplicity, using system/user python)
-# Ensure deps are installed
-pip install -r requirements.txt > /dev/null 2>&1
-python main.py &
+if [ -d "venv" ]; then
+    ./venv/bin/python main.py &
+else
+    echo "Venv not found in backend/, falling back to system python..."
+    python3 main.py &
+fi
 BACKEND_PID=$!
 cd ..
 
