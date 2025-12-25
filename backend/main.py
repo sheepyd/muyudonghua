@@ -74,8 +74,8 @@ async def proxy_emby_stream(item_id: str, request: Request):
     if range_header:
         headers["Range"] = range_header
     
-    # 使用独立的 Client 实例以控制生命周期
-    client = httpx.AsyncClient()
+    # 使用独立的 Client 实例以控制生命周期，并禁用超时（防止播放中断）
+    client = httpx.AsyncClient(timeout=None)
     req = client.build_request("GET", stream_url, headers=headers)
     
     try:
@@ -92,6 +92,9 @@ async def proxy_emby_stream(item_id: str, request: Request):
     for key in ["content-type", "content-length", "content-range", "accept-ranges"]:
         if key in upstream_resp.headers:
             forward_headers[key] = upstream_resp.headers[key]
+            
+    # 关键：告诉 Nginx 不要缓存此响应，直接流式传输给客户端
+    forward_headers["X-Accel-Buffering"] = "no"
 
     # 3. 定义流生成器 (一边收一边发)
     async def stream_generator():
