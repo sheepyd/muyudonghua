@@ -33,6 +33,7 @@ const initPlayer = async (id) => {
     if (data.url) {
        art = new Artplayer({
         container: artRef.value,
+        id: id, // 使用纯 ID 作为进度保存的 Key，不再使用 URL
         url: data.url,
         volume: 0.5,
         isLive: false,
@@ -41,6 +42,7 @@ const initPlayer = async (id) => {
         autoSize: true,
         fullscreen: false,
         theme: '#e50914',
+        // ... 其他选项保持不变 ...
         
         // --- Enhanced Options from Example ---
         pip: true,
@@ -106,6 +108,29 @@ const initPlayer = async (id) => {
 };
 
 onMounted(() => {
+  // 安全清理：删除 localStorage 中残留的带有 api_key 的旧进度数据
+  try {
+    const settings = localStorage.getItem('artplayer_settings');
+    if (settings) {
+      const parsed = JSON.parse(settings);
+      if (parsed.times) {
+        let changed = false;
+        Object.keys(parsed.times).forEach(key => {
+          if (key.includes('api_key')) {
+            delete parsed.times[key];
+            changed = true;
+          }
+        });
+        if (changed) {
+          localStorage.setItem('artplayer_settings', JSON.stringify(parsed));
+          console.log("已安全清理旧的播放记录");
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Cleanup failed", e);
+  }
+
   initPlayer(props.videoId);
 });
 
