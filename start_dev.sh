@@ -14,12 +14,14 @@ if [ ! -f ".env" ]; then
 fi
 
 # 1. Start Backend
-echo ">>> Starting Backend (Port 8800) using venv..."
+echo ">>> Starting Backend (Port 8800)..."
 cd backend
-if [ -d "venv" ]; then
+if [ -f "venv/bin/python" ]; then
+    echo "Using virtual environment..."
     ./venv/bin/python main.py &
 else
-    echo "Venv not found in backend/, falling back to system python..."
+    echo "!!! Warning: venv not found. Using system python3..."
+    echo "Tip: Run 'python3 -m venv venv && ./venv/bin/pip install -r requirements.txt' in backend/"
     python3 main.py &
 fi
 BACKEND_PID=$!
