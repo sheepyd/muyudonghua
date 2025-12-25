@@ -1,0 +1,28 @@
+# Prerequisites
+backend/venv/
+backend/.venv/
+frontend/node_modules/
+frontend/dist/
+
+# Python logs and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+api_debug.log
+dev_server.log
+
+# Env and secrets
+.env
+.DS_Store
+.idea/
+.vscode/
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Project specific
+tips.txt
+文件结构.txt
+导航页/
