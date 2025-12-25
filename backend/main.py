@@ -6,8 +6,9 @@ from urllib.parse import quote
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.responses import StreamingResponse
 
 # 加载环境变量
 load_dotenv()
@@ -23,24 +24,63 @@ app.add_middleware(
 )
 
 # --- 配置部分 ---
-EMBY_HOST = os.getenv("EMBY_HOST", "https://tv.ydyd.me")
-API_KEY = os.getenv("EMBY_API_KEY", "99131296af124aa289ae0f7ca0c49e33")
-USER_ID = os.getenv("EMBY_USER_ID", "c22a12ff9204439184459d87e25da179")
-
-# TMDB 配置
+# 严格从环境变量读取，避免硬编码
+EMBY_HOST = os.getenv("EMBY_HOST", "https://tv.ydyd.me").rstrip("/")
+API_KEY = os.getenv("EMBY_API_KEY")
+USER_ID = os.getenv("EMBY_USER_ID")
 TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
-TMDB_CACHE = {}  # 简单内存缓存: { "Name_Type": {"backdrop": "...", "logo": "..."} }
+
+if not API_KEY:
+    print("❌ 警告: 未检测到 EMBY_API_KEY，请检查 .env 文件")
+
+# TMDB 缓存
+TMDB_CACHE = {}
+
+# --- 核心代理逻辑 (保护 API Key) ---
+
+@app.get("/api/proxy/image")
+async def proxy_emby_image(path: str):
+    """
+    代理 Emby 图片请求，隐藏 API Key
+    path 格式如: /Items/123/Images/Primary
+    """
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="API Key not configured")
+    
+    # 构造真实的 Emby 地址 (确保 path 以 / 开头)
+    clean_path = path if path.startswith("/") else f"/{path}"
+    emby_url = f"{EMBY_HOST}/emby{clean_path}?api_key={API_KEY}"
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(emby_url, timeout=10.0)
+            if resp.status_code != 200:
+                return Response(status_code=resp.status_code)
+            return Response(content=resp.content, media_type=resp.headers.get("content-type"))
+        except Exception as e:
+            print(f"Proxy Image Error: {e}")
+            raise HTTPException(status_code=502)
+
+@app.get("/api/proxy/stream/{item_id}")
+async def proxy_emby_stream(item_id: str):
+    """
+    代理/转发视频流
+    注意：这会消耗服务器流量。如果服务器带宽有限，请知晓。
+    """
+    stream_url = f"{EMBY_HOST}/emby/Videos/{item_id}/stream?static=true&api_key={API_KEY}"
+    
+    async def stream_generator():
+        async with httpx.AsyncClient() as client:
+            async with client.stream("GET", stream_url, timeout=None) as resp:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+
+    return StreamingResponse(stream_generator(), media_type="video/mp4")
 
 # --- 辅助函数 ---
 
 async def fetch_tmdb_images(client: httpx.AsyncClient, name: str, emby_type: str):
-    """
-    根据名称和类型从 TMDB 获取高清 Backdrop 和 Logo
-    """
-    if not TMDB_READ_TOKEN:
-        return None, None
-        
-    if emby_type not in ["Series", "Movie"]:
+    if not TMDB_READ_TOKEN or emby_type not in ["Series", "Movie"]:
         return None, None
 
     cache_key = f"{name}_{emby_type}"
@@ -48,227 +88,119 @@ async def fetch_tmdb_images(client: httpx.AsyncClient, name: str, emby_type: str
         return TMDB_CACHE[cache_key]["backdrop"], TMDB_CACHE[cache_key]["logo"]
 
     tmdb_type = "tv" if emby_type == "Series" else "movie"
-    headers = {
-        "Authorization": f"Bearer {TMDB_READ_TOKEN}",
-        "accept": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {TMDB_READ_TOKEN}", "accept": "application/json"}
     
     try:
-        # 1. 搜索 ID
         search_url = f"https://api.themoviedb.org/3/search/{tmdb_type}?query={quote(name)}&language=zh-CN&page=1"
         resp = await client.get(search_url, headers=headers, timeout=5.0)
-        if resp.status_code != 200:
-            return None, None
-        
         results = resp.json().get("results", [])
-        if not results:
-            return None, None
+        if not results: return None, None
             
         tmdb_id = results[0]["id"]
-        
-        # 2. 获取图片
-        images_url = f"https://api.themoviedb.org/3/{tmdb_type}/{tmdb_id}/images"
-        img_resp = await client.get(f"{images_url}?include_image_language=zh,en,null", headers=headers, timeout=5.0)
-        
-        if img_resp.status_code != 200:
-            return None, None
-            
+        img_resp = await client.get(f"https://api.themoviedb.org/3/{tmdb_type}/{tmdb_id}/images?include_image_language=zh,en,null", headers=headers, timeout=5.0)
         img_data = img_resp.json()
         
-        # 提取 Backdrop
-        backdrop_path = None
-        if img_data.get("backdrops"):
-            backdrop_path = img_data["backdrops"][0]["file_path"]
-        
-        # 提取 Logo
-        logo_path = None
-        if img_data.get("logos"):
-            logo_path = img_data["logos"][0]["file_path"]
+        backdrop_path = img_data["backdrops"][0]["file_path"] if img_data.get("backdrops") else None
+        logo_path = img_data["logos"][0]["file_path"] if img_data.get("logos") else None
             
         backdrop_url = f"https://image.tmdb.org/t/p/original{backdrop_path}" if backdrop_path else None
         logo_url = f"https://image.tmdb.org/t/p/original{logo_path}" if logo_path else None
         
-        # 写入缓存
         TMDB_CACHE[cache_key] = {"backdrop": backdrop_url, "logo": logo_url}
         return backdrop_url, logo_url
-
     except Exception as e:
-        print(f"TMDB Fetch Error for {name}: {e}")
+        print(f"TMDB Error: {e}")
         return None, None
 
-# --- 核心逻辑 ---
-
-@app.get("/")
-async def root():
-    return {
-        "message": "恭喜！后端服务器运行正常。",
-        "docs": "请访问 /docs 查看接口文档",
-        "demo": "请访问 /api/videos 查看视频列表"
-    }
+# --- 核心路由 ---
 
 @app.get("/api/videos")
 async def get_video_list(limit: int = 10, seriesId: str = None):
     async with httpx.AsyncClient() as client:
-        params = {
-            "api_key": API_KEY,
-            "Recursive": "true",
-            "Fields": "Overview,Path,MediaSources,AirDays,PremiereDate,ChannelImage,LogoImageTags,ArtImageTags,ThumbImageTags"
-        }
-        if USER_ID:
-            params["UserId"] = USER_ID
+        params = {"api_key": API_KEY, "Recursive": "true", "Fields": "Overview,PremiereDate,AirDays"}
+        if USER_ID: params["UserId"] = USER_ID
 
         if seriesId:
-            params.update({
-                "IncludeItemTypes": "Episode",
-                "ParentId": seriesId,
-                "SortBy": "SortName",
-                "SortOrder": "Ascending",
-            })
+            params.update({"IncludeItemTypes": "Episode", "ParentId": seriesId, "SortBy": "SortName", "SortOrder": "Ascending"})
         else:
-            params.update({
-                "IncludeItemTypes": "Series,Movie",
-                "SortBy": "DateCreated",
-                "SortOrder": "Descending",
-                "Limit": limit,
-            })
+            params.update({"IncludeItemTypes": "Series,Movie", "SortBy": "DateCreated", "SortOrder": "Descending", "Limit": limit})
 
         try:
             response = await client.get(f"{EMBY_HOST}/emby/Items", params=params)
             response.raise_for_status()
             data = response.json()
             
+            # 并发获取 TMDB
+            tmdb_tasks = [fetch_tmdb_images(client, item["Name"], item["Type"]) if not seriesId else asyncio.sleep(0) for item in data.get("Items", [])]
+            tmdb_results = await asyncio.gather(*tmdb_tasks)
+
             videos = []
-            
-            # 并发获取 TMDB 数据
-            tmdb_tasks = []
-            for item in data.get("Items", []):
-                if not seriesId: 
-                    tmdb_tasks.append(fetch_tmdb_images(client, item["Name"], item["Type"]))
-                else:
-                    tmdb_tasks.append(asyncio.sleep(0))
-
-            tmdb_results = await asyncio.gather(*tmdb_tasks) if tmdb_tasks else [None] * len(data.get("Items", []))
-
             for idx, item in enumerate(data.get("Items", [])):
-                # AirDays 逻辑
-                air_days = item.get("AirDays", [])
-                if not air_days:
-                    p_date = item.get("PremiereDate")
-                    if p_date:
-                        try:
-                            dt = datetime.strptime(p_date[:10], "%Y-%m-%d")
-                            air_days = [dt.strftime("%A")]
-                        except:
-                            pass
-                
-                # 图片逻辑
-                poster_url = f"{EMBY_HOST}/emby/Items/{item['Id']}/Images/Primary?api_key={API_KEY}"
+                # 安全获取各种图片 (通过代理)
+                # 我们的代理地址: /api/proxy/image?path=/Items/{id}/Images/Primary
+                poster_url = f"/api/proxy/image?path=/Items/{item['Id']}/Images/Primary"
                 
                 tmdb_backdrop, tmdb_logo = None, None
-                if tmdb_results and idx < len(tmdb_results):
-                     result = tmdb_results[idx]
-                     if isinstance(result, tuple):
-                         tmdb_backdrop, tmdb_logo = result
+                if not seriesId and isinstance(tmdb_results[idx], tuple):
+                    tmdb_backdrop, tmdb_logo = tmdb_results[idx]
 
-                backdrop_url = tmdb_backdrop
-                if not backdrop_url and item.get("BackdropImageTags"):
-                    backdrop_url = f"{EMBY_HOST}/emby/Items/{item['Id']}/Images/Backdrop/0?api_key={API_KEY}"
+                backdrop_url = tmdb_backdrop or f"/api/proxy/image?path=/Items/{item['Id']}/Images/Backdrop/0"
+                logo_url = tmdb_logo or f"/api/proxy/image?path=/Items/{item['Id']}/Images/Logo"
                 
-                logo_url = tmdb_logo
-                if not logo_url and item.get("LogoImageTags"):
-                     logo_url = f"{EMBY_HOST}/emby/Items/{item['Id']}/Images/Logo?api_key={API_KEY}"
-                
-                thumb_url = ""
-                if item.get("ThumbImageTags"):
-                     thumb_url = f"{EMBY_HOST}/emby/Items/{item['Id']}/Images/Thumb?api_key={API_KEY}"
-                
-                video = {
+                videos.append({
                     "id": item["Id"],
                     "title": item["Name"],
                     "type": item["Type"],
                     "poster_url": poster_url,
                     "backdrop_url": backdrop_url,
                     "logo_url": logo_url,
-                    "thumb_url": thumb_url,
                     "year": item.get("ProductionYear"),
-                    "container": item.get("Container"),
-                    "is_folder": item.get("IsFolder", False),
-                    "air_days": air_days
-                }
-                videos.append(video)
-            return {"total": data.get("TotalRecordCount"), "items": videos}
-            
+                    "air_days": item.get("AirDays", [])
+                })
+            return {"items": videos}
         except Exception as e:
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/play/{item_id}")
 async def get_play_url(item_id: str):
-    play_url = f"{EMBY_HOST}/emby/Videos/{item_id}/stream?static=true&api_key={API_KEY}"
-    
+    """
+    返回播放信息，同样使用代理隐藏密钥
+    """
     async with httpx.AsyncClient() as client:
         try:
-            params = {
-                "api_key": API_KEY,
-                "Fields": "ParentBackdropImageTags,BackdropImageTags,LogoImageTags"
-            }
-            res = await client.get(f"{EMBY_HOST}/emby/Items/{item_id}", params=params)
+            res = await client.get(f"{EMBY_HOST}/emby/Items/{item_id}", params={"api_key": API_KEY})
             res.raise_for_status()
             item = res.json()
             
             series_id = item.get("SeriesId")
-            item_name = item.get("Name", "")
             
-            tmdb_backdrop, tmdb_logo = None, None
-            target_name = item_name
+            # 这里的 url 改为我们后端的流代理地址
+            # 注意：如果服务器带宽撑不住，也可以考虑直接返回 Emby 地址，
+            # 但那样就无法完全隐藏 API Key。
+            masked_play_url = f"/api/proxy/stream/{item_id}"
+            
+            # 尝试从 TMDB 获取背景
+            target_name = item.get("Name")
             target_type = item.get("Type")
-            
             if target_type == "Episode" and series_id:
-                try:
-                    series_res = await client.get(f"{EMBY_HOST}/emby/Items/{series_id}", params={"api_key": API_KEY})
-                    series_data = series_res.json()
-                    target_name = series_data.get("Name")
-                    target_type = "Series"
-                except:
-                    pass
+                s_res = await client.get(f"{EMBY_HOST}/emby/Items/{series_id}", params={"api_key": API_KEY})
+                target_name = s_res.json().get("Name")
+                target_type = "Series"
             
             tmdb_backdrop, tmdb_logo = await fetch_tmdb_images(client, target_name, target_type)
 
-            backdrop_url = tmdb_backdrop
-            if not backdrop_url:
-                if item.get("BackdropImageTags"):
-                    backdrop_url = f"{EMBY_HOST}/emby/Items/{item['Id']}/Images/Backdrop/0?api_key={API_KEY}"
-                elif item.get("ParentBackdropImageTags"):
-                    parent_id = item.get("ParentBackdropItemId", series_id) 
-                    if parent_id:
-                        backdrop_url = f"{EMBY_HOST}/emby/Items/{parent_id}/Images/Backdrop/0?api_key={API_KEY}"
-                if not backdrop_url and series_id:
-                    backdrop_url = f"{EMBY_HOST}/emby/Items/{series_id}/Images/Backdrop/0?api_key={API_KEY}"
-            
-            logo_url = tmdb_logo
-            if not logo_url:
-                if item.get("LogoImageTags"):
-                    logo_url = f"{EMBY_HOST}/emby/Items/{item['Id']}/Images/Logo?api_key={API_KEY}"
-                elif series_id:
-                    logo_url = f"{EMBY_HOST}/emby/Items/{series_id}/Images/Logo?api_key={API_KEY}"
-
-            poster_url = f"{EMBY_HOST}/emby/Items/{item['Id']}/Images/Primary?api_key={API_KEY}"
-
             return {
-                "url": play_url,
-                "type": "auto",
+                "url": masked_play_url,
                 "series_id": series_id,
-                "backdrop_url": backdrop_url,
-                "poster_url": poster_url,
-                "logo_url": logo_url,
+                "backdrop_url": tmdb_backdrop or f"/api/proxy/image?path=/Items/{item['Id']}/Images/Backdrop/0",
+                "poster_url": f"/api/proxy/image?path=/Items/{item['Id']}/Images/Primary",
+                "logo_url": tmdb_logo or f"/api/proxy/image?path=/Items/{item['Id']}/Images/Logo",
                 "title": item.get("Name")
             }
         except Exception as e:
             traceback.print_exc()
-            return {
-                "url": play_url,
-                "type": "auto"
-            }
+            return {"url": f"/api/proxy/stream/{item_id}", "type": "auto"}
 
 if __name__ == "__main__":
     import uvicorn
