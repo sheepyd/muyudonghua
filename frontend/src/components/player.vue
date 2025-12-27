@@ -31,7 +31,7 @@ const initPlayer = async (id) => {
     const data = await res.json();
     
     if (data.url) {
-       art = new Artplayer({
+      art = new Artplayer({
         container: artRef.value,
         id: id, // 使用纯 ID 作为进度保存的 Key，不再使用 URL
         url: data.url,
@@ -40,10 +40,11 @@ const initPlayer = async (id) => {
         muted: false,
         autoplay: true,
         autoSize: false,
-        fullscreen: false,
+        fullscreen: true,
+        fullscreenWeb: false,
         theme: '#e50914',
         // ... 其他选项保持不变 ...
-        
+
         // --- Enhanced Options from Example ---
         pip: true,
         autoMini: true,
@@ -53,7 +54,6 @@ const initPlayer = async (id) => {
         flip: true,
         playbackRate: true,
         aspectRatio: true,
-        fullscreenWeb: true,
         subtitleOffset: true,
         miniProgressBar: false,
         mutex: true,
@@ -64,6 +64,7 @@ const initPlayer = async (id) => {
         lang: navigator.language.toLowerCase(),
         moreVideoAttr: {
           crossOrigin: 'anonymous',
+          preload: 'auto',
         },
         
         // UI Customizations (Referenced from example)
