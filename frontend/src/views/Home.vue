@@ -139,7 +139,7 @@
       </div>
 
       <div class="film-controls" :class="{ visible: hasSelected }" @click.stop>
-        <button class="play-button" @click="goToPlayer" :disabled="!activeTitle">
+        <button class="play-button" @click="requestPlay" :disabled="!activeTitle">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <polygon points="7,5 19,12 7,19" fill="currentColor" />
           </svg>
@@ -164,13 +164,54 @@
     <div class="film-progress" :class="{ visible: hasSelected }">
       <div class="film-progress__bar" :style="{ width: `${progress}%` }"></div>
     </div>
+
+    <div v-if="authOpen" class="auth-overlay" @click.self="closeAuth">
+      <div class="auth-modal" role="dialog" aria-modal="true" @click.stop>
+        <div class="auth-brand">
+          <svg class="auth-brand__icon" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" />
+            <circle cx="8" cy="9" r="1.2" fill="currentColor" />
+            <circle cx="8" cy="15" r="1.2" fill="currentColor" />
+            <circle cx="16" cy="9" r="1.2" fill="currentColor" />
+            <circle cx="16" cy="15" r="1.2" fill="currentColor" />
+          </svg>
+          <div class="auth-brand__text">YDYD<span>.ME</span></div>
+        </div>
+
+        <p class="auth-subtitle">Enter password to unlock playback.</p>
+
+        <label class="auth-field">
+          <span class="auth-label">Password</span>
+          <input
+            ref="authInput"
+            v-model="authPassword"
+            class="auth-input"
+            type="password"
+            placeholder="••••••••"
+            autocomplete="current-password"
+            @keydown.enter.prevent="submitAuth"
+          />
+        </label>
+
+        <div v-if="authError" class="auth-error">{{ authError }}</div>
+
+        <div class="auth-actions">
+          <button class="auth-btn secondary" type="button" @click="closeAuth">Cancel</button>
+          <button class="auth-btn primary" type="button" @click="submitAuth">Unlock</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
+import { hasAuthCookie, setAuthCookie } from '../utils/auth';
 
+const AUTH_PASSWORD = 'ydydme';
+
+const route = useRoute();
 const router = useRouter();
 
 const items = ref([]);
@@ -182,6 +223,12 @@ const scrollContainer = ref(null);
 const itemRefs = ref([]);
 
 const accentPalette = ['#f59e0b', '#ef4444', '#0ea5e9', '#10b981', '#f97316', '#84cc16'];
+
+const authOpen = ref(false);
+const authPassword = ref('');
+const authError = ref('');
+const authInput = ref(null);
+let authPendingAction = null;
 
 const activeItem = computed(() => items.value[activeIndex.value] || null);
 const activeTitle = computed(() => activeItem.value?.title || '');
@@ -215,6 +262,84 @@ const clearSelection = () => {
   hasSelected.value = false;
 };
 
+const openAuth = async () => {
+  authError.value = '';
+  authPassword.value = '';
+  authOpen.value = true;
+  await nextTick();
+  authInput.value?.focus?.();
+};
+
+const closeAuth = () => {
+  authOpen.value = false;
+  authPassword.value = '';
+  authError.value = '';
+  authPendingAction = null;
+
+  if (route.query.auth || route.query.next) {
+    router.replace({ name: 'Home', query: {} });
+  }
+};
+
+const submitAuth = async () => {
+  if (authPassword.value !== AUTH_PASSWORD) {
+    authError.value = 'Incorrect password.';
+    return;
+  }
+
+  setAuthCookie();
+
+  // 清理掉 URL 上的 auth/next，避免按返回键回到首页又弹一次
+  if (route.query.auth || route.query.next) {
+    await router.replace({ name: 'Home', query: {} });
+  }
+
+  authOpen.value = false;
+  authPassword.value = '';
+  authError.value = '';
+
+  const action = authPendingAction;
+  authPendingAction = null;
+  action?.();
+};
+
+const playItem = async (item) => {
+  if (!item) return;
+
+  if (item.type === 'Series') {
+    try {
+      const res = await fetch(`/api/videos?seriesId=${item.id}`);
+      const data = await res.json();
+      const firstEpisode = data.items?.[0];
+      if (!firstEpisode) return;
+      router.push({
+        name: 'Player',
+        params: { id: firstEpisode.id },
+        query: { seriesId: item.id },
+      });
+      return;
+    } catch (error) {
+      console.error('Failed to fetch episodes:', error);
+      return;
+    }
+  }
+
+  router.push({ name: 'Player', params: { id: item.id } });
+};
+
+const requestPlay = async () => {
+  const item = activeItem.value;
+  if (!item) return;
+
+  if (!hasAuthCookie()) {
+    authPendingAction = () => playItem(item);
+    await openAuth();
+    return;
+  }
+
+  await playItem(item);
+};
+
 const prevItem = () => {
   if (activeIndex.value === 0) return;
   activeIndex.value -= 1;
@@ -225,31 +350,6 @@ const nextItem = () => {
   if (activeIndex.value >= items.value.length - 1) return;
   activeIndex.value += 1;
   hasSelected.value = true;
-};
-
-const goToPlayer = async () => {
-  if (!activeItem.value) return;
-  const current = activeItem.value;
-
-  if (current.type === 'Series') {
-    try {
-      const res = await fetch(`/api/videos?seriesId=${current.id}`);
-      const data = await res.json();
-      const firstEpisode = data.items?.[0];
-      if (!firstEpisode) return;
-      router.push({
-        name: 'Player',
-        params: { id: firstEpisode.id },
-        query: { seriesId: current.id },
-      });
-      return;
-    } catch (error) {
-      console.error('Failed to fetch episodes:', error);
-      return;
-    }
-  }
-
-  router.push({ name: 'Player', params: { id: current.id } });
 };
 
 const fetchItems = async () => {
@@ -284,6 +384,24 @@ watch(activeIndex, async () => {
     el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
   }
 });
+
+watch(
+  () => [route.query.auth, route.query.next],
+  async ([authFlag, nextPath]) => {
+    if (hasAuthCookie()) {
+      if (authFlag || nextPath) {
+        router.replace({ name: 'Home', query: {} });
+      }
+      return;
+    }
+
+    if (authFlag && nextPath && !authOpen.value) {
+      authPendingAction = () => router.push(String(nextPath));
+      await openAuth();
+    }
+  },
+  { immediate: true }
+);
 
 onMounted(() => {
   fetchItems();
@@ -887,6 +1005,164 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.5);
   font-family: var(--font-mono);
   z-index: 3;
+}
+
+@keyframes auth-pop {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(9, 9, 11, 0.7);
+  backdrop-filter: blur(18px);
+}
+
+.auth-modal {
+  width: min(420px, 100%);
+  border-radius: 26px;
+  padding: 28px 26px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(24, 24, 27, 0.78);
+  box-shadow: 0 40px 140px rgba(0, 0, 0, 0.65);
+  animation: auth-pop 0.32s ease forwards;
+}
+
+.auth-modal::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 20% 10%, rgba(245, 158, 11, 0.18), transparent 55%),
+    radial-gradient(circle at 80% 90%, rgba(14, 165, 233, 0.14), transparent 60%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.06), transparent);
+  opacity: 0.95;
+  pointer-events: none;
+}
+
+.auth-modal > * {
+  position: relative;
+}
+
+.auth-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.auth-brand__icon {
+  width: 42px;
+  height: 42px;
+  color: rgba(226, 232, 240, 0.85);
+}
+
+.auth-brand__text {
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+  color: rgba(226, 232, 240, 0.92);
+}
+
+.auth-brand__text span {
+  color: var(--accent);
+}
+
+.auth-subtitle {
+  margin: 0 0 18px;
+  color: rgba(226, 232, 240, 0.72);
+  line-height: 1.5;
+  font-size: 0.92rem;
+}
+
+.auth-field {
+  display: grid;
+  gap: 10px;
+}
+
+.auth-label {
+  font-size: 0.65rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+  color: rgba(226, 232, 240, 0.65);
+}
+
+.auth-input {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(9, 9, 11, 0.55);
+  color: rgba(248, 250, 252, 0.95);
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+  outline: none;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.auth-input:focus {
+  border-color: rgba(245, 158, 11, 0.65);
+  box-shadow: 0 0 0 5px rgba(245, 158, 11, 0.15);
+}
+
+.auth-error {
+  margin-top: 12px;
+  font-size: 0.85rem;
+  color: rgba(248, 113, 113, 0.95);
+}
+
+.auth-actions {
+  margin-top: 22px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.auth-btn {
+  border-radius: 999px;
+  padding: 10px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  font-size: 0.62rem;
+  color: rgba(226, 232, 240, 0.85);
+  transition: transform 0.25s ease, border-color 0.25s ease, background 0.25s ease, color 0.25s ease;
+}
+
+.auth-btn:hover {
+  transform: translateY(-1px);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.auth-btn.primary {
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.18);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.auth-btn.primary:hover {
+  border-color: rgba(245, 158, 11, 0.85);
+  background: rgba(245, 158, 11, 0.25);
 }
 
 @keyframes spin-slow {

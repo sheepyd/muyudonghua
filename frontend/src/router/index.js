@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Home from '../views/Home.vue'
 import PlayerView from '../views/PlayerView.vue'
+import { hasAuthCookie } from '../utils/auth'
 
 const routes = [
   {
@@ -18,6 +19,12 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes
+})
+
+router.beforeEach((to) => {
+  if (to.name === 'Player' && !hasAuthCookie()) {
+    return { name: 'Home', query: { auth: '1', next: to.fullPath } }
+  }
 })
 
 export default router

@@ -37,6 +37,10 @@ TMDB_READ_TOKEN = os.getenv("TMDB_READ_TOKEN")
 if not API_KEY:
     print("❌ 警告: 未检测到 EMBY_API_KEY，请检查 .env 文件")
 
+# 播放鉴权：主页开放，但播放/流需要 cookie
+AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "ydyd_auth")
+AUTH_COOKIE_VALUE = os.getenv("AUTH_COOKIE_VALUE", "1")
+
 # 本地缓存 (避免每次请求都打到 TMDB/Emby)
 BASE_DIR = os.path.dirname(__file__)
 CACHE_DIR = os.path.join(BASE_DIR, ".cache")
@@ -52,6 +56,16 @@ TMDB_PREFETCH_SEMAPHORE = None
 
 def _ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
+
+
+def _is_play_authorized(request: Request) -> bool:
+    return request.cookies.get(AUTH_COOKIE_NAME) == AUTH_COOKIE_VALUE
+
+
+def _require_play_auth(request: Request):
+    if _is_play_authorized(request):
+        return
+    raise HTTPException(status_code=401, detail="Password required")
 
 
 def _load_tmdb_cache_from_disk():
@@ -223,6 +237,8 @@ async def proxy_emby_stream(item_id: str, request: Request):
     """
     智能流媒体代理：支持 Range 请求 (拖拽进度条)
     """
+    _require_play_auth(request)
+
     stream_url = f"{EMBY_HOST}/emby/Videos/{item_id}/stream?static=true&api_key={API_KEY}"
     
     # 1. 透传 Range 头 (关键：告诉 Emby 我们只需要视频的一部分)
@@ -615,10 +631,12 @@ async def get_video_list(limit: int = 10, seriesId: str = None):
             raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/play/{item_id}")
-async def get_play_url(item_id: str):
+async def get_play_url(item_id: str, request: Request):
     """
     返回播放信息，同样使用代理隐藏密钥
     """
+    _require_play_auth(request)
+
     async with httpx.AsyncClient() as client:
         try:
             emby_params = {"api_key": API_KEY}
