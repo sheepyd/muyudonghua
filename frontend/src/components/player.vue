@@ -55,7 +55,7 @@ const initPlayer = async (id) => {
         aspectRatio: true,
         fullscreenWeb: true,
         subtitleOffset: true,
-        miniProgressBar: true,
+        miniProgressBar: false,
         mutex: true,
         backdrop: true,
         playsInline: true,

@@ -205,9 +205,9 @@
 </template>
 
 <script setup>
-	import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
-	import { useRoute, useRouter } from 'vue-router';
-	import { getAuthStatus, login } from '../utils/auth';
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { getAuthStatus, login } from '../utils/auth';
 
 const route = useRoute();
 const router = useRouter();
