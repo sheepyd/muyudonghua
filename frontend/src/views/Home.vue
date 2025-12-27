@@ -205,11 +205,9 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
-import { hasAuthCookie, setAuthCookie } from '../utils/auth';
-
-const AUTH_PASSWORD = 'ydydme';
+	import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+	import { useRoute, useRouter } from 'vue-router';
+	import { getAuthStatus, login } from '../utils/auth';
 
 const route = useRoute();
 const router = useRouter();
@@ -282,12 +280,12 @@ const closeAuth = () => {
 };
 
 const submitAuth = async () => {
-  if (authPassword.value !== AUTH_PASSWORD) {
-    authError.value = 'Incorrect password.';
+  authError.value = '';
+  const result = await login(authPassword.value);
+  if (!result.ok) {
+    authError.value = result.error || 'Incorrect password.';
     return;
   }
-
-  setAuthCookie();
 
   // 清理掉 URL 上的 auth/next，避免按返回键回到首页又弹一次
   if (route.query.auth || route.query.next) {
@@ -331,7 +329,8 @@ const requestPlay = async () => {
   const item = activeItem.value;
   if (!item) return;
 
-  if (!hasAuthCookie()) {
+  const authorized = await getAuthStatus();
+  if (!authorized) {
     authPendingAction = () => playItem(item);
     await openAuth();
     return;
@@ -388,10 +387,9 @@ watch(activeIndex, async () => {
 watch(
   () => [route.query.auth, route.query.next],
   async ([authFlag, nextPath]) => {
-    if (hasAuthCookie()) {
-      if (authFlag || nextPath) {
-        router.replace({ name: 'Home', query: {} });
-      }
+    const authorized = await getAuthStatus();
+    if (authorized) {
+      if (authFlag || nextPath) router.replace({ name: 'Home', query: {} });
       return;
     }
 

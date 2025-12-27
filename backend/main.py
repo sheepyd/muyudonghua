@@ -1,8 +1,12 @@
 import asyncio
+import base64
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
+import time
 import traceback
 from datetime import datetime
 from typing import Optional
@@ -10,8 +14,9 @@ from urllib.parse import quote, urlencode
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Response, Request
+from fastapi import FastAPI, HTTPException, Response, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 # 加载环境变量
@@ -39,7 +44,16 @@ if not API_KEY:
 
 # 播放鉴权：主页开放，但播放/流需要 cookie
 AUTH_COOKIE_NAME = os.getenv("AUTH_COOKIE_NAME", "ydyd_auth")
-AUTH_COOKIE_VALUE = os.getenv("AUTH_COOKIE_VALUE", "1")
+AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", "ydydme")
+AUTH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", str(60 * 60 * 24 * 30)))
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "0") == "1"
+
+_AUTH_SECRET_BYTES = None
+
+# 简易防爆破（内存内）
+LOGIN_ATTEMPTS = {}
+LOGIN_WINDOW_SECONDS = 300
+LOGIN_MAX_ATTEMPTS = 20
 
 # 本地缓存 (避免每次请求都打到 TMDB/Emby)
 BASE_DIR = os.path.dirname(__file__)
@@ -58,14 +72,150 @@ def _ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
 
 
+def _get_auth_secret_bytes():
+    global _AUTH_SECRET_BYTES
+    if _AUTH_SECRET_BYTES is not None:
+        return _AUTH_SECRET_BYTES
+
+    secret = os.getenv("AUTH_SECRET")
+    if not secret:
+        secret = secrets.token_urlsafe(32)
+        print("⚠️ 警告: 未设置 AUTH_SECRET，已使用临时随机值（重启后需要重新输入密码）")
+
+    _AUTH_SECRET_BYTES = secret.encode("utf-8")
+    return _AUTH_SECRET_BYTES
+
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _b64url_decode(data: str) -> bytes:
+    padded = data + ("=" * (-len(data) % 4))
+    return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+
+def _sign_auth_payload(payload_b64: str) -> str:
+    secret = _get_auth_secret_bytes()
+    sig = hmac.new(secret, payload_b64.encode("utf-8"), hashlib.sha256).digest()
+    return _b64url_encode(sig)
+
+
+def _make_auth_token(exp_ts: int) -> str:
+    payload = {"v": 1, "exp": int(exp_ts)}
+    payload_raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    payload_b64 = _b64url_encode(payload_raw)
+    sig_b64 = _sign_auth_payload(payload_b64)
+    return f"{payload_b64}.{sig_b64}"
+
+
+def _verify_auth_token(token: str) -> bool:
+    if not token or "." not in token:
+        return False
+    payload_b64, sig_b64 = token.split(".", 1)
+    if not payload_b64 or not sig_b64:
+        return False
+
+    expected = _sign_auth_payload(payload_b64)
+    if not hmac.compare_digest(expected, sig_b64):
+        return False
+
+    try:
+        payload = json.loads(_b64url_decode(payload_b64).decode("utf-8"))
+        exp = int(payload.get("exp", 0))
+    except Exception:
+        return False
+
+    return exp > int(time.time())
+
+
 def _is_play_authorized(request: Request) -> bool:
-    return request.cookies.get(AUTH_COOKIE_NAME) == AUTH_COOKIE_VALUE
+    token = request.cookies.get(AUTH_COOKIE_NAME)
+    return _verify_auth_token(token) if token else False
+
+
+def _get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _is_login_rate_limited(request: Request) -> bool:
+    ip = _get_client_ip(request)
+    now = time.time()
+    attempts = LOGIN_ATTEMPTS.get(ip, [])
+    attempts = [t for t in attempts if now - t < LOGIN_WINDOW_SECONDS]
+    LOGIN_ATTEMPTS[ip] = attempts
+    return len(attempts) >= LOGIN_MAX_ATTEMPTS
+
+
+def _record_login_failure(request: Request):
+    ip = _get_client_ip(request)
+    now = time.time()
+    attempts = LOGIN_ATTEMPTS.get(ip, [])
+    attempts.append(now)
+    LOGIN_ATTEMPTS[ip] = attempts[-LOGIN_MAX_ATTEMPTS:]
+
+
+def _clear_login_failures(request: Request):
+    ip = _get_client_ip(request)
+    LOGIN_ATTEMPTS.pop(ip, None)
 
 
 def _require_play_auth(request: Request):
     if _is_play_authorized(request):
         return
     raise HTTPException(status_code=401, detail="Password required")
+
+
+def _cookie_should_be_secure(request: Request) -> bool:
+    if COOKIE_SECURE:
+        return True
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    if forwarded_proto:
+        return forwarded_proto.lower() == "https"
+    return request.url.scheme == "https"
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    return {"authorized": _is_play_authorized(request)}
+
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request, payload: dict = Body(...)):
+    if _is_login_rate_limited(request):
+        raise HTTPException(status_code=429, detail="Too many attempts, please try later")
+
+    password = payload.get("password") if isinstance(payload, dict) else None
+    if not isinstance(password, str) or not hmac.compare_digest(password, AUTH_PASSWORD):
+        _record_login_failure(request)
+        raise HTTPException(status_code=401, detail="Invalid password")
+
+    _clear_login_failures(request)
+    token = _make_auth_token(int(time.time()) + AUTH_TOKEN_TTL_SECONDS)
+
+    response = JSONResponse({"ok": True})
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        max_age=AUTH_TOKEN_TTL_SECONDS,
+        httponly=True,
+        samesite="Lax",
+        secure=_cookie_should_be_secure(request),
+        path="/",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.post("/api/auth/logout")
+async def auth_logout():
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _load_tmdb_cache_from_disk():
@@ -133,6 +283,22 @@ _load_tmdb_cache_from_disk()
 
 # --- 核心代理逻辑 (保护 API Key) ---
 
+_EMBY_IMAGE_PATH_RE = re.compile(
+    r"^/Items/(?P<id>[A-Za-z0-9]+)/Images/(?P<type>Primary|Logo|Backdrop)(?:/(?P<index>\d+))?$"
+)
+
+
+def _is_allowed_emby_image_path(clean_path: str) -> bool:
+    match = _EMBY_IMAGE_PATH_RE.match(clean_path or "")
+    if not match:
+        return False
+    image_type = match.group("type")
+    index = match.group("index")
+    if image_type == "Backdrop":
+        return True
+    return index is None
+
+
 @app.get("/api/proxy/image")
 async def proxy_emby_image(path: str, request: Request):
     """
@@ -144,6 +310,8 @@ async def proxy_emby_image(path: str, request: Request):
     
     # 构造真实的 Emby 地址 (确保 path 以 / 开头)
     clean_path = path if path.startswith("/") else f"/{path}"
+    if not _is_allowed_emby_image_path(clean_path):
+        raise HTTPException(status_code=400, detail="Invalid image path")
     emby_url = f"{EMBY_HOST}/emby{clean_path}"
 
     upstream_headers = {}
@@ -152,9 +320,8 @@ async def proxy_emby_image(path: str, request: Request):
     if request.headers.get("if-modified-since"):
         upstream_headers["If-Modified-Since"] = request.headers["if-modified-since"]
 
-    forward_params = dict(request.query_params)
-    forward_params.pop("path", None)
-    forward_params.pop("api_key", None)
+    allowed_image_params = {"maxWidth", "maxHeight", "quality", "fillWidth", "fillHeight", "width", "height", "tag", "format"}
+    forward_params = {key: value for key, value in request.query_params.items() if key in allowed_image_params}
     forward_params["api_key"] = API_KEY
     
     cache_key = None
@@ -425,7 +592,7 @@ async def fetch_tmdb_images(client: httpx.AsyncClient, name: str, emby_type: str
 # --- 核心路由 ---
 
 @app.get("/api/videos")
-async def get_video_list(limit: int = 10, seriesId: str = None):
+async def get_video_list(request: Request, limit: int = 10, seriesId: str = None):
     async with httpx.AsyncClient() as client:
         params = {"api_key": API_KEY, "Recursive": "true", "Fields": "Overview,PremiereDate,AirDays,SortName"}
         if USER_ID: params["UserId"] = USER_ID
@@ -433,6 +600,8 @@ async def get_video_list(limit: int = 10, seriesId: str = None):
         try:
             items = []
             if seriesId:
+                _require_play_auth(request)
+
                 def unique_by_id(raw_items):
                     seen = set()
                     unique_items = []

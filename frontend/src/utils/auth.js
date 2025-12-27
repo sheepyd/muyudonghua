@@ -1,43 +1,61 @@
-const AUTH_COOKIE_NAME = 'ydyd_auth';
-const AUTH_COOKIE_VALUE = '1';
+let cachedAuthorized = null;
+let cachedAt = 0;
+const STATUS_CACHE_TTL_MS = 10_000;
 
-export const getCookie = (name) => {
-  if (typeof document === 'undefined') return null;
-  const cookies = document.cookie ? document.cookie.split('; ') : [];
-  for (const cookie of cookies) {
-    const [rawKey, ...rest] = cookie.split('=');
-    if (decodeURIComponent(rawKey) !== name) continue;
-    return decodeURIComponent(rest.join('='));
+export const getAuthStatus = async (options = {}) => {
+  const force = options.force === true;
+  const now = Date.now();
+  if (!force && cachedAuthorized !== null && now - cachedAt < STATUS_CACHE_TTL_MS) {
+    return cachedAuthorized;
   }
-  return null;
+
+  try {
+    const res = await fetch('/api/auth/status', { credentials: 'same-origin' });
+    const data = await res.json().catch(() => ({}));
+    cachedAuthorized = Boolean(res.ok && data && data.authorized);
+  } catch {
+    cachedAuthorized = false;
+  } finally {
+    cachedAt = now;
+  }
+
+  return cachedAuthorized;
 };
 
-export const setCookie = (name, value, options = {}) => {
-  if (typeof document === 'undefined') return;
-  const parts = [`${encodeURIComponent(name)}=${encodeURIComponent(value)}`];
+export const login = async (password) => {
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ password }),
+    });
 
-  if (options.maxAge != null) parts.push(`Max-Age=${options.maxAge}`);
-  if (options.path) parts.push(`Path=${options.path}`);
-  if (options.sameSite) parts.push(`SameSite=${options.sameSite}`);
-  if (options.secure) parts.push('Secure');
+    if (res.ok) {
+      cachedAuthorized = true;
+      cachedAt = Date.now();
+      return { ok: true };
+    }
 
-  document.cookie = parts.join('; ');
+    const data = await res.json().catch(() => ({}));
+    return { ok: false, error: data?.detail || 'Login failed.' };
+  } catch {
+    return { ok: false, error: 'Network error.' };
+  }
 };
 
-export const clearCookie = (name) => {
-  setCookie(name, '', { maxAge: 0, path: '/' });
+export const logout = async () => {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+  } catch {
+    // ignore
+  } finally {
+    cachedAuthorized = false;
+    cachedAt = Date.now();
+  }
 };
 
-export const hasAuthCookie = () => getCookie(AUTH_COOKIE_NAME) === AUTH_COOKIE_VALUE;
-
-export const setAuthCookie = () => {
-  // 30 days
-  setCookie(AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE, {
-    maxAge: 60 * 60 * 24 * 30,
-    path: '/',
-    sameSite: 'Lax',
-  });
+export const clearAuthCache = () => {
+  cachedAuthorized = null;
+  cachedAt = 0;
 };
-
-export const clearAuthCookie = () => clearCookie(AUTH_COOKIE_NAME);
-
