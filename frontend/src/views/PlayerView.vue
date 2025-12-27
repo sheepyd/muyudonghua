@@ -12,8 +12,7 @@
         </button>
 
         <div class="header-title">
-          <img v-if="logoUrl" :src="logoUrl" class="video-logo" alt="Logo" />
-          <span v-else class="title-text">{{ videoTitle }}</span>
+          <span class="title-text">{{ videoTitle || 'Now Playing' }}</span>
         </div>
 
         <div class="header-actions">
@@ -53,16 +52,16 @@
               @click="switchEpisode(ep.id)"
             >
               <div class="playlist-thumb">
-                <img v-if="thumbUrl(ep)" :src="thumbUrl(ep)" :alt="ep.title" loading="lazy" />
+                <img v-if="thumbUrl(ep)" :src="thumbUrl(ep)" :alt="ep.title" loading="lazy" decoding="async" />
                 <div v-else class="thumb-fallback"></div>
                 <div class="thumb-overlay"></div>
-                <div class="thumb-number">{{ formatIndex(ep.index) }}</div>
+                <div class="thumb-number">{{ formatIndex(ep.display_index ?? ep.index) }}</div>
               </div>
 
               <div class="playlist-info">
                 <div class="playlist-meta">
                   <span v-if="ep.id == id" class="active-dot"></span>
-                  <span class="meta-text">EP {{ formatIndex(ep.index) }}</span>
+                  <span class="meta-text">EP {{ formatIndex(ep.display_index ?? ep.index) }}</span>
                 </div>
                 <h4 class="playlist-title">{{ ep.title }}</h4>
               </div>
@@ -85,8 +84,10 @@ const id = ref(route.params.id);
 
 const backdropUrl = ref('');
 const posterUrl = ref('');
-const logoUrl = ref('');
 const seriesId = ref(null);
+const seasonId = ref(null);
+const parentId = ref(null);
+const itemType = ref('');
 const videoTitle = ref('');
 const episodes = ref([]);
 
@@ -109,39 +110,86 @@ const playlistItems = computed(() => {
         },
       ];
 
-  return sourceItems.map((item, index) => ({
-    ...item,
-    index: index + 1,
-  }));
+  const toPositiveInt = (value) => {
+    if (value === null || value === undefined) return null;
+    const num = Number(value);
+    if (!Number.isFinite(num)) return null;
+    const intValue = Math.trunc(num);
+    return intValue > 0 ? intValue : null;
+  };
+
+  const parseEpisodeFromTitle = (title) => {
+    if (!title) return null;
+    const matchCn = title.match(/第\s*(\d+)\s*(?:集|话|話|回|章|卷|巻)/);
+    if (matchCn) return toPositiveInt(matchCn[1]);
+    const matchEn = title.match(/(?:EP|E)\s*(\d+)/i);
+    if (matchEn) return toPositiveInt(matchEn[1]);
+    return null;
+  };
+
+  return sourceItems.map((item, index) => {
+    const realIndex =
+      toPositiveInt(item.index_number) ?? parseEpisodeFromTitle(item.title) ?? index + 1;
+    return {
+      ...item,
+      index: index + 1,
+      display_index: realIndex,
+    };
+  });
 });
 
 const formatIndex = (value) => String(value).padStart(2, '0');
 const thumbUrl = (item) => item?.poster_url || item?.backdrop_url || '';
 
 const fetchPlayInfo = async (videoId) => {
+  const routeSeriesId = route.query.seriesId || route.query.sid;
+
+  const candidatesFromPlay = (data) =>
+    [routeSeriesId, data?.series_id, data?.season_id, data?.parent_id, videoId]
+      .filter(Boolean)
+      .map((value) => String(value));
+
+  const resolveEpisodes = async (candidates) => {
+    const uniqueCandidates = [...new Set(candidates)];
+
+    let bestEpisodes = [];
+    let bestCount = 0;
+    let hasAny = false;
+
+    for (const candidateId of uniqueCandidates) {
+      const loaded = await fetchEpisodes(candidateId);
+      if (!loaded) continue;
+
+      hasAny = true;
+      if (episodes.value.length > bestCount) {
+        bestEpisodes = episodes.value;
+        bestCount = episodes.value.length;
+      }
+
+      if (routeSeriesId && candidateId === String(routeSeriesId)) break;
+      if (episodes.value.length > 1) break;
+    }
+
+    episodes.value = hasAny ? bestEpisodes : [];
+    applyMetaFromEpisodes();
+  };
+
   try {
     const res = await fetch(`/api/play/${videoId}`);
     const data = await res.json();
+
     backdropUrl.value = data.backdrop_url || '';
     posterUrl.value = data.poster_url || '';
-    logoUrl.value = data.logo_url || '';
     seriesId.value = data.series_id ?? null;
+    seasonId.value = data.season_id ?? null;
+    parentId.value = data.parent_id ?? null;
+    itemType.value = data.type || '';
     videoTitle.value = data.title || '';
 
-    let loaded = false;
-    if (seriesId.value) {
-      loaded = await fetchEpisodes(seriesId.value);
-    }
-
-    if (!loaded && seriesId.value !== videoId) {
-      loaded = await fetchEpisodes(videoId);
-    }
-
-    if (!loaded) {
-      episodes.value = [];
-    }
-  } catch (e) {
-    console.error('Error fetching play info:', e);
+    await resolveEpisodes(candidatesFromPlay(data));
+  } catch (error) {
+    console.error('Error fetching play info:', error);
+    await resolveEpisodes([routeSeriesId, videoId].filter(Boolean).map((value) => String(value)));
   }
 };
 
@@ -157,9 +205,19 @@ const fetchEpisodes = async (sid) => {
   }
 };
 
+const applyMetaFromEpisodes = () => {
+  if (!episodes.value.length) return;
+  const current = episodes.value.find((ep) => String(ep.id) === String(id.value));
+  if (!current) return;
+
+  if (!videoTitle.value && current.title) videoTitle.value = current.title;
+  if (!posterUrl.value && current.poster_url) posterUrl.value = current.poster_url;
+  if (!backdropUrl.value && current.backdrop_url) backdropUrl.value = current.backdrop_url;
+};
+
 const switchEpisode = (newId) => {
   if (newId === id.value) return;
-  router.replace({ name: 'Player', params: { id: newId } });
+  router.replace({ name: 'Player', params: { id: newId }, query: route.query });
 };
 
 watch(
@@ -259,12 +317,6 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.video-logo {
-  max-height: 30px;
-  max-width: 240px;
-  object-fit: contain;
 }
 
 .header-actions {

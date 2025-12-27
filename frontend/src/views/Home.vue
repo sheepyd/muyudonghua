@@ -87,7 +87,7 @@
 
             <div class="film-cover">
               <div class="film-cover__media">
-                <img v-if="coverUrl(item)" :src="coverUrl(item)" :alt="item.title" loading="lazy" />
+                <img v-if="coverUrl(item)" :src="coverUrl(item)" :alt="item.title" loading="lazy" decoding="async" />
                 <div v-else class="film-cover__fallback"></div>
                 <div class="film-cover__grain"></div>
                 <div class="film-cover__shade"></div>
@@ -237,7 +237,11 @@ const goToPlayer = async () => {
       const data = await res.json();
       const firstEpisode = data.items?.[0];
       if (!firstEpisode) return;
-      router.push({ name: 'Player', params: { id: firstEpisode.id } });
+      router.push({
+        name: 'Player',
+        params: { id: firstEpisode.id },
+        query: { seriesId: current.id },
+      });
       return;
     } catch (error) {
       console.error('Failed to fetch episodes:', error);

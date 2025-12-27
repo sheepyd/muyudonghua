@@ -1,6 +1,7 @@
 # Prerequisites
 backend/venv/
 backend/.venv/
+backend/.cache/
 frontend/node_modules/
 frontend/dist/
 
@@ -26,3 +27,4 @@ frontend/.env.production.local
 tips.txt
 文件结构.txt
 导航页/
+模板/
